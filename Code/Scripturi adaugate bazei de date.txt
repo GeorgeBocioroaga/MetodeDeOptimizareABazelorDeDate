@@ -1,0 +1,129 @@
+-- crearea tabelei (pe user-ul DWBI_1) pentru care se va aplica fragmentarea oriziontal primara
+
+create table ORDERS_REGIONS_ALL as
+select 
+    distinct a.id_order, s.description as status_desc, a.order_date, a.id_driver_vehicle, a.id_client, r.name as lift_region_name, i.id_invoice invoice_no, i.invoice_date, i.invoice_value
+from    
+        REQUEST_ORDER a, 
+        LIFT_POINT b, 
+        city c, 
+        REGION r, 
+        STATUS s,
+        INVOICE i 
+where   b.id_lift_point = a.id_lift_point and 
+        c.id_city = b.id_city and 
+        c.id_region = r.id_region and
+        s.id_status = a.id_status and 
+        a.id_invoice = i.id_invoice;
+		
+-- creare ORDERS_REGIONS_BT (DWBI_1)
+
+CREATE TABLE ORDERS_REGIONS_BT AS
+SELECT * FROM ORDERS_REGIONS_ALL
+WHERE lift_region_name='Botosani';
+
+-- creare ORDERS_REGIONS_REST (DWBI_2)
+
+CREATE TABLE ORDERS_REGIONS_REST AS
+SELECT * FROM ORDERS_REGIONS_ALL
+WHERE lift_region_name!='Botosani';
+
+-- trigger sync data between ORDERS_REGIONS_ALL, ORDERS_REGIONS_BT and ORDERS_REGIONS_REST
+
+CREATE OR REPLACE TRIGGER syncOrdersRegionsPart_TRG 
+AFTER UPDATE OR INSERT OR DELETE ON ORDERS_REGIONS_ALL 
+REFERENCING OLD as old
+NEW as new
+FOR EACH ROW 
+DECLARE
+    --pragma autonomous_transaction;
+BEGIN 
+  IF INSERTING then
+    dbms_output.put_Line('After insert');
+    dbms_output.put_Line(:new.ID_ORDER);
+            
+    IF lower(:new.lift_region_name) = 'botosani' then
+       insert into ORDERS_REGIONS_BT(id_order, status_desc, order_date, id_driver_vehicle, id_client, lift_region_name, invoice_no, invoice_date, invoice_value)
+            values (:new.ID_ORDER, :new.status_desc, :new.order_date, :new.id_driver_vehicle, :new.id_client, :new.lift_region_name, :new.invoice_no, :new.invoice_date, :new.invoice_value); 
+    ELSE
+       insert into DWBI2.ORDERS_REGIONS_REST(id_order, status_desc, order_date, id_driver_vehicle, id_client, lift_region_name, invoice_no, invoice_date, invoice_value)
+            values (:new.ID_ORDER, :new.status_desc, :new.order_date, :new.id_driver_vehicle, :new.id_client, :new.lift_region_name, :new.invoice_no, :new.invoice_date, :new.invoice_value); 
+    END IF;
+        
+  ELSIF UPDATING then
+    dbms_output.put_Line('After update');
+     IF lower(:new.lift_region_name) = 'botosani' then
+       update ORDERS_REGIONS_BT set 
+            status_desc = :new.status_desc, 
+            order_date =  :new.order_date, 
+            id_driver_vehicle = :new.id_driver_vehicle, 
+            id_client = :new.id_client, 
+            lift_region_name = :new.lift_region_name, 
+            invoice_no = :new.invoice_no, 
+            invoice_date = :new.invoice_date, 
+            invoice_value = :new.invoice_value
+        where ID_ORDER = :old.ID_ORDER;
+        
+        DELETE FROM DWBI2.ORDERS_REGIONS_REST where ID_ORDER = :old.ID_ORDER;
+    ELSE
+        update DWBI2.ORDERS_REGIONS_REST set 
+            status_desc = :new.status_desc, 
+            order_date =  :new.order_date, 
+            id_driver_vehicle = :new.id_driver_vehicle, 
+            id_client = :new.id_client, 
+            lift_region_name = :new.lift_region_name, 
+            invoice_no = :new.invoice_no, 
+            invoice_date = :new.invoice_date, 
+            invoice_value = :new.invoice_value
+        where ID_ORDER = :old.ID_ORDER;
+        
+        DELETE FROM ORDERS_REGIONS_BT where ID_ORDER = :old.ID_ORDER;
+    END IF;
+     
+  ELSIF DELETING then
+    dbms_output.put_Line('After delete');
+    DELETE FROM ORDERS_REGIONS_BT where ID_ORDER = :old.ID_ORDER;
+    DELETE FROM DWBI2.ORDERS_REGIONS_REST where ID_ORDER = :old.ID_ORDER;
+    
+  end if;
+END;
+/
+
+select * from ORDERS_REGIONS_ALL where id_order = 995;
+
+update ORDERS_REGIONS_ALL set id_client = 2 where id_order = 995;
+
+select * from ORDERS_REGIONS_BT where id_order = 995;
+
+insert into ORDERS_REGIONS_ALL(id_order, status_desc, order_date, id_driver_vehicle, id_client, lift_region_name, invoice_no, invoice_date, invoice_value)
+values (994, 'Processing', trunc(sysdate-1), 7, 1, 'Cluj', 20210001, trunc(sysdate), 199); 
+
+delete from ORDERS_REGIONS_ALL where id_order = 999;
+
+-- trigger instead of
+
+CREATE OR REPLACE TRIGGER ORDERS_REGIONS_TRG
+INSTEAD OF INSERT ON ORDERS_REGIONS_V
+FOR EACH ROW
+BEGIN
+    INSERT INTO ORDERS_REGIONS_ALL
+        (ID_ORDER, status_desc, order_date, id_driver_vehicle, 
+            id_client, lift_Region_name, invoice_no, invoice_Date, invoice_value)
+        VALUES
+            (:NEW.ID_ORDER, :NEW.status_desc, :NEW.order_date, :NEW.id_driver_vehicle, 
+                :NEW.id_client, :NEW.lift_Region_name, :NEW.invoice_no, :NEW.invoice_Date, :NEW.invoice_value);
+    
+END;
+
+insert into ORDERS_REGIONS_V (ID_ORDER, status_desc, order_date, id_driver_vehicle, 
+            id_client, lift_Region_name, invoice_no, invoice_Date, invoice_value) 
+             VALUES
+            (1, 'Lifted', trunc(sysdate-2), 313, 10, 'Suceava', 202100002, trunc(sysdate-1), 299);
+            
+select a.*, 'ORDERS_REGIONS_ALL' as TABLE_NAME from ORDERS_REGIONS_ALL a where id_Order = 1    
+union
+select a.*, 'ORDERS_REGIONS_BT' as TABLE_NAME from ORDERS_REGIONS_BT a where id_Order = 1
+union            
+select  a.*, 'dwbi2.ORDERS_REGIONS_REST' as TABLE_NAME from dwbi2.ORDERS_REGIONS_REST a where id_Order = 1
+union
+select a.*, 'ORDERS_REGIONS_V' as TABLE_NAME from ORDERS_REGIONS_V a where id_Order = 1;

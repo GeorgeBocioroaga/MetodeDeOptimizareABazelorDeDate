@@ -1,0 +1,179 @@
+--DE CREAT PE USER-UL DWBI 1--
+
+CREATE TABLE "INVOICE_DWBI_1" 
+	(	
+	"ID_INVOICE" NUMBER, 
+	"INVOICE_DATE" DATE DEFAULT SYSDATE,  
+	"TRANSPORT_VALUE" NUMBER DEFAULT 0, 
+	"INVOICE_VALUE" NUMBER, 
+	) ;
+   
+ALTER TABLE "INVOICE_DWBI_1" MODIFY ("ID_INVOICE" NOT NULL ENABLE);
+ALTER TABLE "INVOICE_DWBI_1" MODIFY ("INVOICE_DATE" NOT NULL ENABLE);
+ALTER TABLE "INVOICE_DWBI_1" MODIFY ("INVOICE_VALUE" NOT NULL ENABLE);
+
+GRANT REFERENCES ON CLIENT TO DWBI1;
+
+--DE CREAT PE USER-UL DWBI 2--
+
+CREATE TABLE "INVOICE_DWBI_2"
+	(
+	"ID_INVOICE" NUMBER, 
+	"ID_CLIENT" NUMBER, 
+	"REMARKS" VARCHAR2(250), 
+	"INVOICE_FILE" BLOB
+	) ;
+
+COMMENT ON COLUMN "INVOICE_DWBI_2"."INVOICE_FILE" IS 'DIGITAL FILE';
+ALTER TABLE "INVOICE_DWBI_2" MODIFY ("ID_INVOICE" NOT NULL ENABLE);
+ALTER TABLE "INVOICE_DWBI_2" MODIFY ("ID_CLIENT" NOT NULL ENABLE);
+
+ALTER TABLE INVOICE_DWBI_2
+ADD CONSTRAINT INVOICE_FK_DWBI_2
+FOREIGN KEY (ID_CLIENT)
+REFERENCES DWBI1.CLIENT(ID_CLIENT);
+
+
+-- Trigger sincronizare date intre tabele INVOICE, INVOICE_DWBI_1 SI INVOICE_DWBI_2
+
+CREATE OR REPLACE TRIGGER Sync_Invoice_Vertical_Fragmentation
+AFTER UPDATE OR INSERT OR DELETE ON INVOICE 
+REFERENCING OLD as old
+NEW as new
+FOR EACH ROW 
+DECLARE
+    --pragma autonomous_transaction;
+BEGIN 
+  IF INSERTING then
+	insert into INVOICE_DWBI_1(id_invoice, invoice_date, transport_value, invoice_value)
+	values(:new.id_invoice, :new.invoice_date, :new.transport_value, :new.invoice_value);
+	
+	insert into DWBI2.INVOICE_DWBI_2(id_invoice, id_client, remarks, invoice_file)
+	values(:new.id_invoice, :new.id_client, :new.remarks, :new.invoice_file);
+            
+  ELSIF UPDATING then
+       update INVOICE_DWBI_1 set 
+            invoice_date = :new.invoice_date, 
+            transport_value =  :new.transport_value, 
+            invoice_value = :new.invoice_value, 
+        where id_invoice = :old.id_invoice;
+        
+    ELSE
+        update DWBI2.INVOICE_DWBI_2 set 
+            id_client = :new.id_client, 
+            remarks=  :new.remarks, 
+            invoice_file = :new.invoice_file,
+        where id_invoice = :old.id_invoice;
+             
+  ELSIF DELETING then
+    DELETE FROM INVOICE_DWBI_1 where id_invoice = :old.id_invoice;
+    DELETE FROM DWBI2.INVOICE_DWBI_2 where id_invoice = :old.id_invoice;
+    
+  end if;
+END;
+/
+
+--Testare trigger sincronizare
+
+INSERT INTO INVOICE (ID_CLIENT,INVOICE_DATE,TRANSPORT_VALUE,INVOICE_VALUE, REMARKS, INVOICE_FILE) 
+VALUES (1,'9-Nov-2020',100,200, 'Ala bala portocala', 'invoice9112021.pdf');
+
+select * from invoice order by id_invoice desc;
+
+select * from invoice_dwbi_1 order by id_invoice desc;
+select * from dwbi2.invoice_dwbi_2 order by id_invoice desc;
+
+update invoice
+set invoice_value = 400, remarks = 'Ana are mere'
+where id_invoice = {ID-UL ULTIMULUI INVOICE INSERAT};
+
+select * from invoice order by id_invoice desc;
+
+select * from invoice_dwbi_1 order by id_invoice desc;
+select * from dwbi2.invoice_dwbi_2 order by id_invoice desc;
+
+delete from invoice
+where id_invoice = {ID-UL ULTIMULUI INVOICE INSERAT};
+
+select * from invoice order by id_invoice desc;
+
+select * from invoice_dwbi_1 order by id_invoice desc;
+select * from dwbi2.invoice_dwbi_2 order by id_invoice desc;
+
+
+--Creare vizualizare pentru transparenta datelor
+
+CREATE OR REPLACE VIEW INVOICE_VIZUALIZATION AS
+select ib1.id_invoice, ib1.invoice_date, ib1.transport_value, ib1. invoice_value, ib2.id_client, ib2.remarks, ib2.invoice_file
+from invoice_dwbi_1 ib1 join dwbi2.invoice_dwbi_2 ib2 on (ib1.id_invoice = ib2.id_invoice)
+
+--Testare vizualizare
+
+select * from invoice;
+select * from INVOICE_VIZUALIZATION;
+
+--TRIGGERI INSTEAD OF PENTRU INSERARE IN VIZUALIAZARE
+
+
+CREATE OR REPLACE TRIGGER INVOICE_INSERT_VIZUALIZATION_TRIGGER
+INSTEAD OF INSERT ON INVOICE_VIZUALIZATION
+FOR EACH ROW
+BEGIN
+	insert into INVOICE(invoice_date, transport_value, invoice_value,id_client, remarks, invoice_file)
+	values(:new.invoice_date, :new.transport_value, :new.invoice_value, :new.id_client, :new.remarks, , :new.invoice_file)   
+END;
+
+
+CREATE OR REPLACE TRIGGER INVOICE_UPDATE_VIZUALIZATION_TRIGGER
+INSTEAD OF UPDATE ON INVOICE_VIZUALIZATION
+FOR EACH ROW
+BEGIN
+	update INVOICE set
+	invoice_date = :new.invoice_date, 
+        transport_value =  :new.transport_value, 
+        invoice_value = :new.invoice_value,  
+        id_client = :new.id_client, 
+        remarks=  :new.remarks, 
+        invoice_file = :new.invoice_file
+	where id_invoice := old.id_invoice;
+END;
+
+CREATE OR REPLACE TRIGGER INVOICE_DELETE_VIZUALIZATION_TRIGGER
+INSTEAD OF DELETE ON INVOICE_VIZUALIZATION
+FOR EACH ROW
+BEGIN
+	delete from INVOICE where id_invoice := old.id_invoice;   
+END;
+
+
+ 
+--TESTARE TRIGGER INSTEAD OF PENTRU VIZUALIZARE
+
+INSERT INTO INVOICE_VIZUALIZATION(ID_CLIENT,INVOICE_DATE,TRANSPORT_VALUE,INVOICE_VALUE, REMARKS, INVOICE_FILE) 
+VALUES (2,'25-Jun-2020',50,400, 'Hello', 'invoice9112021.pdf');
+
+select * from invoice order by id_invoice desc;
+
+select * from invoice_dwbi_1 order by id_invoice desc;
+select * from dwbi2.invoice_dwbi_2 order by id_invoice desc;
+
+update INVOICE_VIZUALIZATION
+set invoice_value = 233, remarks = 'Hello again!'
+where id_invoice = {ID-UL ULTIMULUI INVOICE INSERAT};
+
+select * from invoice order by id_invoice desc;
+
+select * from invoice_dwbi_1 order by id_invoice desc;
+select * from dwbi2.invoice_dwbi_2 order by id_invoice desc;
+
+delete from INVOICE_VIZUALIZATION
+where id_invoice = {ID-UL ULTIMULUI INVOICE INSERAT};
+
+select * from invoice order by id_invoice desc;
+
+select * from invoice_dwbi_1 order by id_invoice desc;
+select * from dwbi2.invoice_dwbi_2 order by id_invoice desc;
+
+
+
+
